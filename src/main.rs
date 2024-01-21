@@ -1,14 +1,15 @@
 mod models;
+mod sockets;
+use crate::models::common::DepthUpdate;
 use crate::models::common::{generate_random_string, BinanceOrderBook, Config};
+use crate::sockets::binance_depth_update_socket::BinanceDepthUpdateStream;
+use crate::sockets::common::DepthUpdateStream;
 use chrono::Utc;
-use rand::Rng;
 use std::sync::mpsc;
-use std::time::Duration;
-use std::{fs, string};
+use std::{fs, thread};
 
-use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
+use rdkafka::producer::{BaseProducer, BaseRecord};
 use rdkafka::ClientConfig;
-use serde_json::json;
 use serde::Serialize;
 use std::time::Instant;
 
@@ -39,10 +40,9 @@ pub struct BookOrder {
     pub flags: String,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // Create Kafka producer configuration
-    let producer: FutureProducer = ClientConfig::new()
+    let producer: BaseProducer = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
         .create()
         .expect("Producer creation error");
@@ -58,7 +58,7 @@ async fn main() {
     let binance_market_for_depth_diff = binance_market.clone();
 
     //let (tx_binance_ob, rx_binance_ob) = mpsc::channel();
-    let (tx_binance_depth_diff, rx_binance_depth_diff) = mpsc::channel::<BinanceOrderBook>();
+    let (tx_binance_depth_diff, rx_binance_depth_diff) = mpsc::channel::<DepthUpdate>();
 
     let client = reqwest::blocking::Client::new();
 
@@ -101,49 +101,99 @@ async fn main() {
 
         let json_string = serde_json::to_string(&book_order).expect("JSON serialization error");
 
-        let delivery = producer.send(
-            FutureRecord::to(&"test").key("").payload(&json_string),
-            Duration::from_secs(0),
-        );
+        let delivery = producer.send(BaseRecord::to(&"test").key("").payload(&json_string));
 
-        match delivery.await {
+        match delivery {
             Ok(_delivery) => continue,
             Err((e, _)) => println!("Error: {:?}", e),
         }
     }
 
-    let duration =  Instant::now() - start;
-    println!("Duration: {:?}",duration);
+    let duration = Instant::now() - start;
+    println!("Duration to publish orders from api in kafka: {:?}", duration);
 
-    // let json_value = json!({
-    //     "name": "John Doe",
-    //     "age": 30,
-    //     "city": "New York",
-    // });
+    let binance_websocket_url_for_depth_diff = "wss://fstream.binance.com";
 
-    // let json_string = serde_json::to_string(&json_value).expect("JSON serialization error");
+    // Now you can use binance_websocket_url_for_depth_diff for the second thread
+    thread::spawn(move || {
+        let diff_depth_stream =
+            BinanceDepthUpdateStream::<crate::models::common::DepthUpdate>::new();
+        let url = format!(
+            "{}/stream?streams={}@depth@100ms",
+            &binance_websocket_url_for_depth_diff, &binance_market_for_depth_diff
+        );
+        diff_depth_stream.stream_depth_update_socket(
+            &url,
+            &binance_market_for_depth_diff,
+            tx_binance_depth_diff,
+        );
+    });
 
-    // let delivery = producer.send(
-    //     FutureRecord::to(&"test")
-    //         .key("")
-    //         .payload(&json_string),
-    //     Duration::from_secs(0),
-    // );
+    loop {
+        match rx_binance_depth_diff.try_recv() {
+            Ok(value) => {
+                tracing::info!("bids count: {:?}", value.data.bids.len());
 
-    // println!("producer connected");
+                let start_time = Instant::now();
 
-    // match delivery.await {
-    //     Ok(delivery) => println!("Sent: {:?}", delivery),
-    //     Err((e, _)) => println!("Error: {:?}", e),
-    // }
+                for bid in &value.data.bids {
+                    // Convert the bid to a BookOrder
+                    let book_order = BookOrder {
+                        is_buy: true,       // Assuming these are buy orders; adjust if necessary
+                        reduce_only: false, // Set according to your logic
+                        quantity: bid.1 as u128,
+                        price: bid.0 as u128,
+                        timestamp: Utc::now().timestamp(),
+                        trigger_price: 0,        // Set according to your logic
+                        leverage: 1,             // Set according to your logic
+                        expiration: 0,           // Set according to your logic
+                        hash: bid.0.to_string(), // Generate a unique hash for the order
+                        salt: rand::random(),
+                        maker: generate_random_string(10), // Assuming 'maker' is defined in your scope
+                        flags: generate_random_string(10), // Assuming 'flags' are defined in your scope
+                    };
+                    // if(bid.1 > 0) {
+                    //     // Upsert the order in the in-memory order book
+                    //     upsert_order(&mut native_order_book, book_order);
 
-    // // Poll at regular intervals to process all the asynchronous delivery events.
-    for _ in 0..10 {
-        producer.poll(Duration::from_millis(100));
+                    // } else if (bid.1 == 0) {
+                    //     delete_order(&mut native_order_book, book_order.price, book_order.timestamp, &book_order.hash);
+                    // }
+
+                    let json_string =
+                        serde_json::to_string(&book_order).expect("JSON serialization error");
+
+                    let delivery =
+                        producer.send(BaseRecord::to(&"test").key("").payload(&json_string));
+
+                    match delivery {
+                        Ok(_delivery) => println!("Order Published to kafka from stream: {:?}",json_string),
+                        Err((e, _)) => println!("Error: {:?}", e),
+                    }
+                }
+
+                let end_time = Instant::now();
+                let duration = end_time - start_time;
+                tracing::info!("orderbook update duration: {:?}", duration);
+
+                tracing::info!("binance depth diff: {:?}", value);
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                // No message from binance yet
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                tracing::debug!("Binance worker has disconnected!");
+            }
+        }
     }
 
-    // // And/or flush the producer before dropping it.
-    producer
-        .flush(Duration::from_secs(1))
-        .expect("Flush failed");
+    // // // Poll at regular intervals to process all the asynchronous delivery events.
+    // for _ in 0..10 {
+    //     producer.poll(Duration::from_millis(100));
+    // }
+
+    // // // And/or flush the producer before dropping it.
+    // producer
+    //     .flush(Duration::from_secs(1))
+    //     .expect("Flush failed");
 }
