@@ -1,5 +1,6 @@
 mod models;
 mod sockets;
+mod benchmark;
 use crate::models::common::DepthUpdate;
 use crate::models::common::{generate_random_string, BinanceOrderBook, Config};
 use crate::sockets::binance_depth_update_socket::BinanceDepthUpdateStream;
@@ -54,7 +55,6 @@ fn main() {
     let config: Config = serde_json::from_str(&config_str).expect("JSON was not well-formatted");
     let market = config.markets.first().unwrap();
     let binance_market = market.symbols.binance.to_owned();
-    let binance_market_for_ob = binance_market.clone();
     let binance_market_for_depth_diff = binance_market.clone();
 
     //let (tx_binance_ob, rx_binance_ob) = mpsc::channel();
