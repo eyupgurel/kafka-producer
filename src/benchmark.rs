@@ -1,10 +1,10 @@
 extern crate rdkafka;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use rand::Rng;
 use rdkafka::{
-    producer::{BaseProducer, BaseRecord},
+    producer::{BaseProducer, BaseRecord, Producer, ThreadedProducer, DefaultProducerContext},
     ClientConfig,
 };
 use serde_derive::Serialize;
@@ -80,7 +80,7 @@ fn generate_rand_orders(size: usize) -> Vec<BookOrder> {
 
 fn main() {
     // Create Kafka producer configuration
-    let producer: BaseProducer = ClientConfig::new()
+    let producer: ThreadedProducer<DefaultProducerContext> = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
         .create()
         .expect("Producer creation error");
@@ -91,17 +91,26 @@ fn main() {
 
     let random_orders = generate_rand_orders(num_of_orders);
 
+    println!("orders len: {}",random_orders.len());
+
     let start_time = Instant::now();
 
     for order in random_orders {
         let json_string = serde_json::to_string(&order).expect("JSON serialization error");
 
-        let delivery = producer.send(BaseRecord::to(&"test").key("").payload(&json_string));
+        let delivery: Result<(), (rdkafka::error::KafkaError, BaseRecord<'_, str, String>)> = producer.send(BaseRecord::to(&"test").payload(&json_string));
 
         match delivery {
-            Ok(_delivery) => continue,
+            Ok(delivery) => continue,
             Err((e, _)) => println!("Error: {:?}", e),
         }
+
+        // producer.poll(Duration::from_millis(100));
+
+        // // // // Poll at regular intervals to process all the asynchronous delivery events.
+        // for _ in 0..10 {
+        //     producer.poll(Duration::from_millis(100));
+        // }
     }
 
     let end_time = Instant::now();
@@ -111,4 +120,8 @@ fn main() {
         "duration to publish {} orders to kafka: {:?}",
         num_of_orders, duration
     );
+
+    producer.flush(Duration::from_secs(10)).expect("error while flushing");
+
+    drop(producer);
 }

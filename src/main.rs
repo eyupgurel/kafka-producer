@@ -43,7 +43,7 @@ pub struct BookOrder {
 
 fn main() {
     // Create Kafka producer configuration
-    let producer: BaseProducer = ClientConfig::new()
+    let producer:BaseProducer = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
         .create()
         .expect("Producer creation error");
