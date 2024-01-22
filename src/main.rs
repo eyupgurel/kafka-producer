@@ -93,10 +93,10 @@ fn main() {
             trigger_price: 0,                 // Set according to your logic
             leverage: 1,                      // Set according to your logic
             expiration: 0,                    // Set according to your logic
-            hash: generate_random_string(10), // Generate a unique hash for the order
+            hash: generate_random_string(40), // Generate a unique hash for the order
             salt: rand::random(),
-            maker: "SomeMaker".to_string(), // Replace with actual maker
-            flags: "SomeFlags".to_string(), // Replace with actual flags
+            maker: generate_random_string(10), // Assuming 'maker' is defined in your scope
+            flags: generate_random_string(10), // Assuming 'flags' are defined in your scope
         };
 
         let json_string = serde_json::to_string(&book_order).expect("JSON serialization error");
@@ -147,7 +147,7 @@ fn main() {
                         trigger_price: 0,        // Set according to your logic
                         leverage: 1,             // Set according to your logic
                         expiration: 0,           // Set according to your logic
-                        hash: bid.0.to_string(), // Generate a unique hash for the order
+                        hash: generate_random_string(40), // Generate a unique hash for the order
                         salt: rand::random(),
                         maker: generate_random_string(10), // Assuming 'maker' is defined in your scope
                         flags: generate_random_string(10), // Assuming 'flags' are defined in your scope
